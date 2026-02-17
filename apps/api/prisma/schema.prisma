@@ -1,0 +1,217 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  STAFF
+}
+
+enum SubscriptionPlan {
+  FREE
+  PRO
+  NETWORK
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  TRIALING
+  PAST_DUE
+  CANCELED
+  INCOMPLETE
+}
+
+enum ApplicationStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+model User {
+  id                String            @id @default(cuid())
+  email             String            @unique
+  passwordHash      String?
+  displayName       String
+  microsoftId       String?           @unique
+  isPlatformAdmin   Boolean           @default(false)
+  isBanned          Boolean           @default(false)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  memberships       WorkspaceMember[]
+  createdWorkspaces Workspace[]       @relation("WorkspaceOwner")
+  subscriptions     Subscription[]    @relation("SubscriptionOwner")
+  applications      Application[]     @relation("ApplicationApplicant")
+  auditLogs         AuditLog[]
+}
+
+model Workspace {
+  id                String            @id @default(cuid())
+  name              String
+  slug              String            @unique
+  ownerId           String
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  owner             User              @relation("WorkspaceOwner", fields: [ownerId], references: [id])
+  members           WorkspaceMember[]
+  subscriptions     Subscription[]
+  revenueEntries    RevenueEntry[]
+  products          Product[]
+  jobPosts          JobPost[]
+  applications      Application[]
+  playerProfiles    PlayerProfile[]
+  playerIncidents   PlayerIncident[]
+  auditLogs         AuditLog[]
+  featureFlags      Json?
+}
+
+model WorkspaceMember {
+  id          String        @id @default(cuid())
+  workspaceId String
+  userId      String
+  role        WorkspaceRole
+  createdAt   DateTime      @default(now())
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id])
+  user        User          @relation(fields: [userId], references: [id])
+
+  @@unique([workspaceId, userId])
+  @@index([workspaceId, role])
+}
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  workspaceId          String
+  ownerId              String
+  plan                 SubscriptionPlan   @default(FREE)
+  status               SubscriptionStatus @default(TRIALING)
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+  periodStart          DateTime?
+  periodEnd            DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  workspace            Workspace          @relation(fields: [workspaceId], references: [id])
+  owner                User               @relation("SubscriptionOwner", fields: [ownerId], references: [id])
+
+  @@unique([workspaceId])
+}
+
+model RevenueEntry {
+  id          String    @id @default(cuid())
+  workspaceId String
+  date        DateTime
+  source      String
+  productName String
+  amount      Decimal   @db.Decimal(10, 2)
+  currency    String    @default("USD")
+  createdById String?
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@index([workspaceId, date])
+}
+
+model Product {
+  id          String    @id @default(cuid())
+  workspaceId String
+  name        String
+  price       Decimal   @db.Decimal(10, 2)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+}
+
+model JobPost {
+  id                 String        @id @default(cuid())
+  workspaceId        String
+  title              String
+  description        String
+  formSchema         Json
+  isOpen             Boolean       @default(true)
+  createdById        String
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+  workspace          Workspace     @relation(fields: [workspaceId], references: [id])
+  applications       Application[]
+
+  @@index([workspaceId, isOpen])
+}
+
+model Application {
+  id               String            @id @default(cuid())
+  workspaceId      String
+  jobPostId        String
+  applicantUserId  String?
+  applicantTag     String?
+  answers          Json
+  internalNotes    String?
+  status           ApplicationStatus @default(PENDING)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  workspace        Workspace         @relation(fields: [workspaceId], references: [id])
+  jobPost          JobPost           @relation(fields: [jobPostId], references: [id])
+  applicantUser    User?             @relation("ApplicationApplicant", fields: [applicantUserId], references: [id])
+
+  @@index([workspaceId, status])
+}
+
+model PlayerIdentity {
+  id             String          @id @default(cuid())
+  globalPlayerId String          @unique
+  minecraftUuid  String?         @unique
+  knownUsernames String[]
+  createdAt      DateTime        @default(now())
+  profiles       PlayerProfile[]
+}
+
+model PlayerProfile {
+  id               String           @id @default(cuid())
+  workspaceId      String
+  playerIdentityId String
+  reputationScore  Int              @default(50)
+  warningCount     Int              @default(0)
+  notes            String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  workspace        Workspace        @relation(fields: [workspaceId], references: [id])
+  playerIdentity   PlayerIdentity   @relation(fields: [playerIdentityId], references: [id])
+  incidents        PlayerIncident[]
+
+  @@unique([workspaceId, playerIdentityId])
+  @@index([workspaceId, warningCount])
+}
+
+model PlayerIncident {
+  id              String        @id @default(cuid())
+  workspaceId     String
+  playerProfileId String
+  type            String
+  severity        Int
+  details         String
+  createdById     String?
+  createdAt       DateTime      @default(now())
+  workspace       Workspace     @relation(fields: [workspaceId], references: [id])
+  playerProfile   PlayerProfile @relation(fields: [playerProfileId], references: [id])
+
+  @@index([workspaceId, createdAt])
+}
+
+model AuditLog {
+  id          String    @id @default(cuid())
+  workspaceId String?
+  userId      String?
+  action      String
+  entityType  String
+  entityId    String?
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id])
+  user        User?      @relation(fields: [userId], references: [id])
+
+  @@index([workspaceId, createdAt])
+}
